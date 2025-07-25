@@ -169,7 +169,7 @@ if ($update->getCallbackQuery()) {
             $ext = $format === 'jpg' ? 'jpeg' : strtolower($format);
             $outputPath = __DIR__ . "/images/{$chatId}_result.$ext";
             $img = $manager->read($sourcePath);
-            $img->save($outputPath, 90, $ext);
+            $img->save($outputPath);
             $telegram->sendDocument([
                 'chat_id' => $chatId,
                 'document' => fopen($outputPath, 'rb'),
