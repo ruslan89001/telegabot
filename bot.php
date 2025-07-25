@@ -32,12 +32,47 @@ if ($update->getCallbackQuery()) {
     if (!$chatId) exit;
     $data = $callback->getData();
     $originalPath = __DIR__ . "/images/{$chatId}_original";
+    $tempPath = __DIR__ . "/images/{$chatId}_temp";
+
+    $showNextActions = function($telegram, $chatId) {
+        $keyboard = [
+            [
+                ['text' => 'Кадрировать', 'callback_data' => 'crop'],
+                ['text' => 'Ч/Б', 'callback_data' => 'grayscale'],
+                ['text' => 'Формат', 'callback_data' => 'format']
+            ],
+            [
+                ['text' => '✅ Готово', 'callback_data' => 'done']
+            ]
+        ];
+        $telegram->sendMessage([
+            'chat_id' => $chatId,
+            'text' => 'Можете применить ещё действие или завершить обработку:',
+            'reply_markup' => json_encode(['inline_keyboard' => $keyboard])
+        ]);
+    };
+
+    if ($data === 'done') {
+        if (file_exists($tempPath)) {
+            unlink($tempPath);
+        }
+        if (file_exists($originalPath)) {
+            unlink($originalPath);
+        }
+        $telegram->sendMessage([
+            'chat_id' => $chatId,
+            'text' => 'Обработка завершена! Пришлите новое изображение.'
+        ]);
+        exit;
+    }
+
+    $sourcePath = file_exists($tempPath) ? $tempPath : $originalPath;
 
     if ($data === 'crop') {
         $sizes = [
-            ['1:1 (500x500)', 'crop_1_1'],
-            ['4:3 (800x600)', 'crop_4_3'],
-            ['16:9 (1280x720)', 'crop_16_9']
+            ['1:1', 'crop_1_1'],
+            ['4:3', 'crop_4_3'],
+            ['16:9', 'crop_16_9']
         ];
         $keyboard = [
             [
@@ -53,16 +88,15 @@ if ($update->getCallbackQuery()) {
         ]);
         exit;
     } elseif ($data === 'grayscale') {
-        if (file_exists($originalPath)) {
-            $outputPath = __DIR__ . "/images/{$chatId}_grayscale.jpg";
-            $img = $manager->read($originalPath)->greyscale();
-            $img->save($outputPath);
+        if (file_exists($sourcePath)) {
+            $img = $manager->read($sourcePath)->greyscale();
+            $img->save($tempPath);
             $telegram->sendPhoto([
                 'chat_id' => $chatId,
-                'photo' => fopen($outputPath, 'rb'),
+                'photo' => fopen($tempPath, 'rb'),
                 'caption' => 'Готово! Ч/Б изображение.'
             ]);
-            unlink($outputPath);
+            $showNextActions($telegram, $chatId);
         } else {
             $telegram->sendMessage([
                 'chat_id' => $chatId,
@@ -91,23 +125,36 @@ if ($update->getCallbackQuery()) {
         exit;
     }
     if (strpos($data, 'crop_') === 0) {
-        if (file_exists($originalPath)) {
-            $outputPath = __DIR__ . "/images/{$chatId}_cropped.jpg";
-            $img = $manager->read($originalPath);
+        if (file_exists($sourcePath)) {
+            $img = $manager->read($sourcePath);
+            $originalWidth = $img->width();
+            $originalHeight = $img->height();
+
             if ($data === 'crop_1_1') {
-                $img = $img->cover(500, 500);
-            } elseif ($data === 'crop_4_3') {
-                $img = $img->cover(800, 600);
-            } elseif ($data === 'crop_16_9') {
-                $img = $img->cover(1280, 720);
+                $size = min($originalWidth, $originalHeight);
+                $img = $img->cover($size, $size);
+                $caption = "Соотношение сторон 1:1";
             }
-            $img->save($outputPath);
+            elseif ($data === 'crop_4_3') {
+                $width = $originalWidth;
+                $height = $width * (3/4);
+                $img = $img->cover($width, $height);
+                $caption = "Соотношение сторон 4:3";
+            }
+            elseif ($data === 'crop_16_9') {
+                $width = $originalWidth;
+                $height = $width * (9/16);
+                $img = $img->cover($width, $height);
+                $caption = "Соотношение сторон 16:9";
+            }
+
+            $img->save($tempPath);
             $telegram->sendPhoto([
                 'chat_id' => $chatId,
-                'photo' => fopen($outputPath, 'rb'),
-                'caption' => 'Готово! Кадрированное изображение.'
+                'photo' => fopen($tempPath, 'rb'),
+                'caption' => "Готово! " . $caption
             ]);
-            unlink($outputPath);
+            $showNextActions($telegram, $chatId);
         } else {
             $telegram->sendMessage([
                 'chat_id' => $chatId,
@@ -117,11 +164,11 @@ if ($update->getCallbackQuery()) {
         exit;
     }
     if (strpos($data, 'format_') === 0) {
-        if (file_exists($originalPath)) {
+        if (file_exists($sourcePath)) {
             $format = str_replace('format_', '', $data);
             $ext = $format === 'jpg' ? 'jpeg' : strtolower($format);
-            $outputPath = __DIR__ . "/images/{$chatId}_converted.$ext";
-            $img = $manager->read($originalPath);
+            $outputPath = __DIR__ . "/images/{$chatId}_result.$ext";
+            $img = $manager->read($sourcePath);
             $img->save($outputPath, 90, $ext);
             $telegram->sendDocument([
                 'chat_id' => $chatId,
@@ -129,6 +176,7 @@ if ($update->getCallbackQuery()) {
                 'caption' => 'Готово! Формат: ' . strtoupper($format)
             ]);
             unlink($outputPath);
+            $showNextActions($telegram, $chatId);
         } else {
             $telegram->sendMessage([
                 'chat_id' => $chatId,
@@ -139,45 +187,72 @@ if ($update->getCallbackQuery()) {
     }
 }
 
-if ($update->getMessage() && $update->getMessage()->has('photo')) {
+if ($update->getMessage()) {
     $msg = $update->getMessage();
     $chatId = isset($msg['chat']['id']) ? $msg['chat']['id'] : null;
-    if (!$chatId) exit;
+    if ($chatId) {
+        $tempPath = __DIR__ . "/images/{$chatId}_temp";
+        $originalPath = __DIR__ . "/images/{$chatId}_original";
+        if (file_exists($tempPath)) {
+            unlink($tempPath);
+        }
+        if (file_exists($originalPath)) {
+            unlink($originalPath);
+        }
+    }
 
-    $photos = $msg['photo'] ?? [];
-    if (!is_array($photos) || count($photos) === 0) exit;
+    $getFileInfo = function($message) {
+        if ($message->has('photo')) {
+            $photos = $message['photo'] ?? [];
+            if (!is_array($photos) || count($photos) === 0) return null;
+            $lastPhoto = end($photos);
+            return [
+                'file_id' => $lastPhoto['file_id'] ?? null,
+                'mime_type' => 'image/jpeg'
+            ];
+        } elseif ($message->has('document')) {
+            $doc = $message['document'] ?? [];
+            $mime_type = $doc['mime_type'] ?? '';
+            if (strpos($mime_type, 'image/') === 0) {
+                return [
+                    'file_id' => $doc['file_id'] ?? null,
+                    'mime_type' => $mime_type
+                ];
+            }
+        }
+        return null;
+    };
 
-    $lastPhoto = end($photos);
-    $fileId = $lastPhoto['file_id'] ?? null;
-    if (!$fileId) exit;
-
-    $file = $telegram->getFile(['file_id' => $fileId]);
-    $filePath = $file['file_path'];
-    $url = "https://api.telegram.org/file/bot$botToken/$filePath";
-    $localPath = __DIR__ . "/images/{$chatId}_original";
-    file_put_contents($localPath, file_get_contents($url));
-
-    $keyboard = [
-        [
-            ['text' => 'Кадрировать', 'callback_data' => 'crop'],
-            ['text' => 'Ч/Б', 'callback_data' => 'grayscale'],
-            ['text' => 'Формат', 'callback_data' => 'format']
-        ]
-    ];
-    $telegram->sendMessage([
-        'chat_id' => $chatId,
-        'text' => 'Выберите действие с изображением:',
-        'reply_markup' => json_encode(['inline_keyboard' => $keyboard])
-    ]);
-    exit;
-} else {
-    if ($update->getMessage()) {
-        $msg = $update->getMessage();
+    $fileInfo = $getFileInfo($msg);
+    if ($fileInfo && $fileInfo['file_id']) {
         $chatId = isset($msg['chat']['id']) ? $msg['chat']['id'] : null;
-        if ($chatId) {
+        if (!$chatId) exit;
+
+        $file = $telegram->getFile(['file_id' => $fileInfo['file_id']]);
+        $filePath = $file['file_path'];
+        $url = "https://api.telegram.org/file/bot$botToken/$filePath";
+        $localPath = __DIR__ . "/images/{$chatId}_original";
+        file_put_contents($localPath, file_get_contents($url));
+
+        $keyboard = [
+            [
+                ['text' => 'Кадрировать', 'callback_data' => 'crop'],
+                ['text' => 'Ч/Б', 'callback_data' => 'grayscale'],
+                ['text' => 'Формат', 'callback_data' => 'format']
+            ]
+        ];
+        $telegram->sendMessage([
+            'chat_id' => $chatId,
+            'text' => 'Выберите действие с изображением:',
+            'reply_markup' => json_encode(['inline_keyboard' => $keyboard])
+        ]);
+        exit;
+    } else {
+        if ($msg->has('chat')) {
+            $chatId = $msg['chat']['id'];
             $telegram->sendMessage([
                 'chat_id' => $chatId,
-                'text' => 'Пожалуйста, пришлите изображение.'
+                'text' => 'Пожалуйста, пришлите изображение (можно как фото или как файл).'
             ]);
         }
     }
